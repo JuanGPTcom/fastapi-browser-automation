@@ -19,6 +19,7 @@ from datetime import datetime
 from playwright.async_api import async_playwright
 from typing import Dict
 import weakref
+import psutil
 
 # Set DISPLAY for headed browsers (VNC support)
 os.environ['DISPLAY'] = ':1'
@@ -439,6 +440,11 @@ async def execute_command(command_data: CommandInput):
                 claude_command = ["claude", "-p", "--dangerously-skip-permissions", actual_command]
             else:
                 claude_command = ["claude", "-p", command_data.command]
+
+            # Get system resource info before execution
+            memory_before = psutil.virtual_memory().percent
+            cpu_before = psutil.cpu_percent(interval=0.1)
+
             result = subprocess.run(
                 claude_command,
                 capture_output=True,
@@ -446,6 +452,10 @@ async def execute_command(command_data: CommandInput):
                 timeout=300,  # 300 second timeout (5 minutes)
                 cwd="/root"  # Execute from root directory
             )
+
+            # Get system resource info after execution
+            memory_after = psutil.virtual_memory().percent
+            cpu_after = psutil.cpu_percent(interval=0.1)
             
             # Log Claude's response to context-out.txt
             try:
@@ -461,12 +471,32 @@ async def execute_command(command_data: CommandInput):
                 # Don't fail the main request if logging fails
                 pass
 
+            # Handle specific return codes
+            status = "success" if result.returncode == 0 else "completed_with_errors"
+
+            # Add specific messaging for common error codes
+            error_messages = {
+                143: "Process terminated (SIGTERM) - possibly due to resource limits or external termination",
+                137: "Process killed (SIGKILL) - likely out of memory",
+                130: "Process interrupted (SIGINT) - user interruption",
+                124: "Process timeout - exceeded time limit"
+            }
+
+            error_msg = error_messages.get(result.returncode, "")
+
             return {
-                "status": "success",
+                "status": status,
                 "command": f"claude -p {command_data.command}",
                 "return_code": result.returncode,
                 "stdout": result.stdout,
                 "stderr": result.stderr,
+                "error_explanation": error_msg if result.returncode != 0 else None,
+                "system_resources": {
+                    "memory_before": f"{memory_before:.1f}%",
+                    "memory_after": f"{memory_after:.1f}%",
+                    "cpu_before": f"{cpu_before:.1f}%",
+                    "cpu_after": f"{cpu_after:.1f}%"
+                },
                 "timestamp": datetime.now().isoformat()
             }
         
@@ -492,7 +522,7 @@ async def execute_command(command_data: CommandInput):
             }
             
     except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=408, detail="Command execution timed out (30s)")
+        raise HTTPException(status_code=408, detail="Command execution timed out (5 minutes)")
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=f"Command not found: {str(e)}")
     except Exception as e:
