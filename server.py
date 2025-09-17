@@ -433,15 +433,34 @@ async def execute_command(command_data: CommandInput):
         
         if command_data.command is not None:
             # Execute claude command
-            claude_command = ["claude", "-p", command_data.command]
+            if command_data.command.startswith("--dangerously-skip-permissions "):
+                # Handle elevated permissions
+                actual_command = command_data.command[32:]  # Remove the flag prefix
+                claude_command = ["claude", "-p", "--dangerously-skip-permissions", actual_command]
+            else:
+                claude_command = ["claude", "-p", command_data.command]
             result = subprocess.run(
                 claude_command,
                 capture_output=True,
                 text=True,
-                timeout=30,  # 30 second timeout
+                timeout=300,  # 300 second timeout (5 minutes)
                 cwd="/root"  # Execute from root directory
             )
             
+            # Log Claude's response to context-out.txt
+            try:
+                context_out_path = "/root/context-out.txt"
+                with open(context_out_path, 'w', encoding='utf-8') as f:
+                    f.write(f"Claude Response - {datetime.now().isoformat()}\n")
+                    f.write(f"Command: {command_data.command}\n")
+                    f.write(f"Return Code: {result.returncode}\n")
+                    f.write(f"Output:\n{result.stdout}\n")
+                    if result.stderr:
+                        f.write(f"Errors:\n{result.stderr}\n")
+            except Exception as log_error:
+                # Don't fail the main request if logging fails
+                pass
+
             return {
                 "status": "success",
                 "command": f"claude -p {command_data.command}",
@@ -458,7 +477,7 @@ async def execute_command(command_data: CommandInput):
                 terminal_command,
                 capture_output=True,
                 text=True,
-                timeout=30,  # 30 second timeout
+                timeout=300,  # 300 second timeout (5 minutes)
                 cwd="/root",  # Execute from root directory
                 shell=False  # Use shell=False for security
             )
